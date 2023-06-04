@@ -1,0 +1,456 @@
+# In[1]:
+#importing some necessary libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
+from catboost import CatBoostClassifier
+import xgboost as xgb
+from sklearn.linear_model import LogisticRegression
+import warnings
+warnings.filterwarnings("ignore")
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_curve, roc_auc_score
+
+# In[2]:
+#importing the dataset
+df = pd.read_csv("cleaned_SANHANES 15_17.csv")
+
+# In[3]:
+#checking the dimension of the dataset
+df.shape
+
+# In[4]:
+#general information of the dataset
+df.info()
+
+# In[5]:
+#checking for null values
+df.isna().sum()
+
+# In[6]:
+#To check our target variable
+ax = df["anemia_bin"].value_counts(normalize=True).mul(100).plot.bar()
+for p in ax.patches:
+    y = p.get_height()
+    x = p.get_x() + p.get_width() / 2
+    # Label of bar height
+    label = "{:.1f}%".format(y)
+    # Annotate plot
+    ax.annotate(label, xy=(x, y), xytext=(0, 5), textcoords="offset points", ha="center", fontsize=14)
+# Remove y axis
+ax.get_yaxis().set_visible(False)
+# In[7]:
+# Create the figure and subplots
+fig, axs = plt.subplots(11, 4, figsize=(15, 30))
+# Flatten the axs array to make it easier to iterate through
+axs = axs.flatten()
+# Loop through each feature and plot a histogram in a separate subplot
+for i, col in enumerate(df.columns):
+    axs[i].boxplot(df[col]) #density = True, bins=10)
+    axs[i].set_title(col)
+# Hide any unused subplots
+for i in range(len(df.columns), 11 * 4):
+    axs[i].axis('off')
+# Add a main title and adjust the spacing between subplots
+#plt.suptitle('Histograms for Multiple Features')
+plt.subplots_adjust(hspace=0.6, wspace=0.6)
+#fig.suptitle("Histogram for the features", fontsize = 30)
+# Show the plot
+plt.show()
+
+# In[8]:
+# Create the figure and subplots
+fig, axs = plt.subplots(11, 4, figsize=(15, 30))
+# Flatten the axs array to make it easier to iterate through
+axs = axs.flatten()
+# Loop through each feature and plot a histogram in a separate subplot
+for i, col in enumerate(df.columns):
+    axs[i].hist(df[col], density = True, bins=10)
+    axs[i].set_title(col)
+# Hide any unused subplots
+for i in range(len(df.columns), 11 * 4):
+    axs[i].axis('off')
+# Add a main title and adjust the spacing between subplots
+#plt.suptitle('Histograms for Multiple Features')
+plt.subplots_adjust(hspace=0.6, wspace=0.6)
+#fig.suptitle("Histogram for the features", fontsize = 30)
+plt.show()
+
+# In[9]:
+#Let's find the correlation between the independent and the dependent feature
+df.corr()['anemia_bin'].sort_values().plot(kind='bar', figsize=(18, 6))
+
+# In[10]:
+X = df.drop(["anemia_bin"], axis = 1)
+y = df["anemia_bin"]
+
+# In[11]:
+from imblearn.over_sampling import SMOTE
+sm = SMOTE(random_state=42)
+X, y = sm.fit_resample(X, y)
+
+# In[12]:
+from sklearn.model_selection import train_test_split
+X_train,X_test,y_train,y_test = train_test_split(X,y,random_state=42,stratify=y, test_size = 0.3)
+
+# In[13]:
+from sklearn.feature_selection import RFE
+rfe_method = RFE(RandomForestClassifier(random_state=10), n_features_to_select = 30, step = 3)
+rfe_method.fit(X_train, y_train)
+
+# In[14]:
+new_cols = X_train.columns[(rfe_method.get_support())]
+new_cols
+
+# In[15]:
+Models = [("Logistic Regression", LogisticRegression(random_state=123)), 
+              ("XGBoost",  xgb.XGBClassifier(random_state = 123)),
+              ("CatBoost", CatBoostClassifier(random_state = 123, silent=True)),
+              ("Random Forest",  RandomForestClassifier(random_state = 123)),
+              ("Gradient Boosting", GradientBoostingClassifier(random_state = 123)),
+              ("Adaboost Classifier", AdaBoostClassifier(random_state = 123))]
+
+# In[16]:
+Model_results = pd.DataFrame(columns=["Model"]) #"ROC Score"])
+
+# In[17]:
+#Fitting and evaluating the models
+result_table = pd.DataFrame(columns=['classifiers', 'fpr','tpr','auc'])
+from tqdm import tqdm
+for clf_name, clf in tqdm( Models):
+    clf.fit(X_train, y_train)
+    
+    predictions = clf.predict(X_test)
+    ypred_prob = clf.predict_proba(X_test)[:, 1]
+    rocAuc_score = roc_auc_score(y_test, ypred_prob)
+    
+    fpr, tpr, _ = roc_curve(y_test,  ypred_prob)
+    result_table = result_table.append({'classifiers': clf_name,
+                                        'fpr':fpr, 
+                                        'tpr':tpr, 
+                                        'auc':rocAuc_score}, ignore_index=True)
+    # Compute sensitivity and specificity
+    tn, fp, fn, tp = confusion_matrix(y_test, y_pred).ravel()
+    matrix = [[tn, fp, fn, tp]]
+
+    sensit = tp / (tp + fn)
+    specif = tn / (tn + fp)
+
+    f1 = f1_score(y_test, y_pred)
+    mcc = matthews_corrcoef(y_test, y_pred)
+    bal_acc = balanced_accuracy_score(y_test, y_pred)
+    kappa = cohen_kappa_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred)
+    
+    new_row = {"Model": clf_name, 'ROC Score':rocAuc_score, 'F1 Score': f1,
+                         'Cohen kappa': kappa,
+                        'Balanced Acc': bal_acc,
+                        'MCC' : mcc,
+                        'Precision': precision,
+                        'Sensitivity': sensit,
+                        'Specificity': specif}
+    Model_results = Model_results.append(new_row, ignore_index=True)
+
+# Set name of the classifiers as index labels
+result_table.set_index('classifiers', inplace=True)
+
+# In[18]:
+Model_results
+
+# In[19]:
+Model_results.to_csv("Model Results.csv")
+
+
+# In[20]:
+result_table
+
+# In[21]:
+#Plotting the ROC Curve
+fig = plt.figure(figsize=(10,6))
+for i in result_table.index:
+    plt.plot(result_table.loc[i]['fpr'], 
+             result_table.loc[i]['tpr'], 
+             label="{}, AUC:" "{:.4f}".format(i, result_table.loc[i]['auc']))
+plt.plot([0,1], [0,1], color='black', linestyle='--')
+
+plt.xticks(np.arange(0.0, 1.1, step=0.2))
+plt.xlabel("False Positive Rate", fontsize=15)
+
+plt.yticks(np.arange(0.0, 1.1, step=0.2))
+plt.ylabel("True Positive Rate", fontsize=15)
+
+plt.title('ROC Curve', fontweight='heavy', fontsize=15)
+plt.legend(prop={'size':10}, loc='lower right')
+plt.show()
+
+# In[22]:
+fig.savefig('joint_roc_curve.png')
+
+# In[23]:
+result_table.reset_index('classifiers', inplace=True)
+result_table
+
+# In[24]:
+model_names = result_table['classifiers'].tolist()
+fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(15, 10))
+for i, ax in enumerate(axes.flat):
+    model_name = model_names[i]
+    roc_data = result_table[result_table['classifiers'] == model_name]
+    fpr = roc_data['fpr']
+    tpr = roc_data['tpr']
+    rocAuc_score = roc_data['auc']
+
+    # Plot the ROC curve
+    ax.plot(np.mean(fpr), np.mean(tpr), label ="AUC:" "{:.4f}".format(result_table.loc[i]['auc']))
+    ax.plot([0, 1], [0, 1], 'k--')  # Plot the random guessing curve
+    #ax.set_xlim([0.0, 1.0])
+    #ax.set_ylim([0.0, 1.0])
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.set_title(f'{model_name}')
+    ax.legend(loc="lower right")
+
+# Adjust the spacing between subplots
+plt.tight_layout()
+
+# Display the plot
+plt.show()
+
+# In[25]:
+fig.savefig('individual_roc_curve.png')
+
+#In[26]: 
+from sklearn.model_selection import GridSearchCV
+model = LogisticRegression()
+param_grid = {
+    'C': [0.1, 1.0, 10.0, 15.0],
+    'penalty': ['l1', 'l2'],
+    'solver': ['liblinear', 'lbfgs', 'sag', 'newton-cg'],
+    'max_iter': [100, 150, 200, 500]
+}
+# Perform grid search using cross-validation
+grid_search = GridSearchCV(model, param_grid, cv=5)
+grid_search.fit(X_train, y_train)
+# Get the best hyperparameter values
+best_params = grid_search.best_params_
+# Train the logistic regression model with the best hyperparameters
+best_model = LogisticRegression(**best_params)
+best_model.fit(X_train, y_train)
+# Evaluate the model on the test set
+y_pred = best_model.predict(X_test)
+print(balanced_accuracy_score(y_test, y_pred))
+
+#In[28]: 
+best_params
+
+#In[29]: 
+xgb_param_grid = {
+    'n_estimators': [100, 200, 300, 350],  
+    'learning_rate': [0.1, 0.01, 0.001, 1.0], 
+    'max_depth': [3, 5, 7,9], 
+    'subsample': [0.7, 0.8, 0.9, 1.0],
+    'colsample_bytree': [0.8, 0.9, 1.0]}
+    #'gamma': [0, 1, 5],
+
+# Create an instance of XGBoost classifier
+xg = xgb.XGBClassifier()
+
+# Perform grid search with cross-validation
+grid_search = GridSearchCV(estimator = xg, param_grid = xgb_param_grid, cv=5)
+grid_search.fit(X_train, y_train)
+xgb_best_params = grid_search.best_params_
+xgb_best_model = xgb.XGBClassifier(**xgb_best_params)
+xgb_best_model.fit(X_train, y_train)
+# Evaluate the model on the test set
+xgb_y_pred = xgb_best_model.predict(X_test)
+print(balanced_accuracy_score(y_test, xgb_y_pred))
+
+#In[30]:
+xgb_best_params
+
+#In[31]:
+catboost = CatBoostClassifier()
+# Define the parameter grid for grid search
+cbt_param_grid = {
+    'iterations': [100, 200, 300, 400], 
+    'learning_rate': [0.1, 0.01, 0.001, 1.0],  
+    'depth': [2, 4, 6],  
+    'l2_leaf_reg': [1, 3, 5], 
+}
+# Create an instance of GridSearchCV
+grid_search = GridSearchCV(estimator=catboost, param_grid=cbt_param_grid, cv=5)
+grid_search.fit(X_train, y_train)
+cbt_best_params = grid_search.best_params_
+cbt_best_model = CatBoostClassifier(**cbt_best_params)
+cbt_best_model.fit(X_train, y_train)
+# Evaluate the model on the test set
+cbt_y_pred = cbt_best_model.predict(X_test)
+print(balanced_accuracy_score(y_test, cbt_y_pred))
+
+#In[32]:
+cbt_best_params
+
+
+#In[33]: 
+ran = RandomForestClassifier()
+# Define the parameter grid for grid search
+ran_param_grid = {
+    'n_estimators': [100, 200, 300],
+    'max_depth': [3, 5, 8, 10],
+    'min_samples_split': [0.0001, 0.001, 1],
+    'min_samples_leaf': [0.0001, 0.001, 0.1],
+    'max_features': ['auto', 'sqrt'],
+    'bootstrap': [True, False]
+}
+# Create an instance of GridSearchCV
+ran_grid_search = GridSearchCV(estimator=ran, param_grid = ran_param_grid, cv=5)
+ran_grid_search.fit(X_train, y_train)
+ran_best_params = ran_grid_search.best_params_
+ran_best_model = RandomForestClassifier(**ran_best_params)
+ran_best_model.fit(X_train, y_train)
+# Evaluate the model on the test set
+ran_y_pred = ran_best_model.predict(X_test)
+print(balanced_accuracy_score(y_test, ran_y_pred))
+
+#In[34]:
+print(ran_best_params)
+
+#In[35]:
+# Create an instance of the Gradient Boosting classifier
+gra = GradientBoostingClassifier()
+# Define the parameter grid for hyperparameter tuning
+gra_param_grid = {
+    'n_estimators': [100, 200, 300, 400],
+    'learning_rate': [0.1, 0.01, 0.001],
+    'max_depth': [3, 5, 7, 8],
+    'subsample': [0.5, 0.6, 0.8, 1.0]
+}
+# Create an instance of GridSearchCV with the classifier and parameter grid
+gra_grid_search = GridSearchCV(estimator=gra, param_grid = gra_param_grid, cv=5)
+gra_grid_search.fit(X_train, y_train)
+gra_best_params = gra_grid_search.best_params_
+gra_best_model = GradientBoostingClassifier(**gra_best_params)
+gra_best_model.fit(X_train, y_train)
+# Evaluate the model on the test set
+gra_y_pred = gra_best_model.predict(X_test)
+print(balanced_accuracy_score(y_test, gra_y_pred))
+
+#In[36]:
+print(gra_best_params)
+
+#In[37]:
+# Create an instance of the AdaBoost classifier
+ada = AdaBoostClassifier()
+# Define the parameter grid for hyperparameter tuning
+ada_param_grid = {
+    'n_estimators': [200, 300, 400, 500],
+    'learning_rate': [0.1, 0.01, 0.001, 1.0],
+    'algorithm': ['SAMME', 'SAMME.R']
+}
+ada_grid_search = GridSearchCV(estimator = ada, param_grid = ada_param_grid, cv=5)
+ada_grid_search.fit(X_train, y_train)
+ada_best_params = ada_grid_search.best_params_
+ada_best_model = AdaBoostClassifier(**ada_best_params)
+ada_best_model.fit(X_train, y_train)
+# Evaluate the model on the test set
+ada_y_pred = ada_best_model.predict(X_test)
+print(balanced_accuracy_score(y_test, ada_y_pred))
+
+#In[38]:
+print(ada_best_params)
+
+#In[39]:
+new_models = [("Logistic Regression", LogisticRegression( C = 15.0, max_iter = 100, penalty = 'l2', solver = 'liblinear',random_state=123)), ("XGBoost",  xgb.XGBClassifier(colsample_bytree = 0.8, learning_rate = 0.01, max_depth = 9, n_estimators = 350, subsample = 0.7, random_state = 123)),  ("CatBoost", CatBoostClassifier(depth = 6, iterations = 300, l2_leaf_reg = 1, learning_rate = 0.1, random_state = 123, silent=True)),              ("Random Forest",  RandomForestClassifier(bootstrap = True, max_depth = 10, max_features = 'sqrt', min_samples_leaf = 0.001, min_samples_split = 0.0001, n_estimators = 200, random_state = 123)),    ("Gradient Boosting", GradientBoostingClassifier(learning_rate = 0.1, max_depth = 7, n_estimators = 400,  subsample = 0.5, random_state = 123)), ("Adaboost Classifier", AdaBoostClassifier(algorithm = 'SAMME', learning_rate = 1.0,                                                          n_estimators = 200, random_state = 123))]
+
+#In[40]:
+New_Model_results = pd.DataFrame(columns=["Model"])
+
+#In[41]: 
+new_result_table = pd.DataFrame(columns=['classifiers', 'fpr','tpr','auc'])
+from tqdm import tqdm
+for clf_name, clf in tqdm(new_models):
+    clf.fit(X_train, y_train)
+    new_y_pred = clf.predict(X_test)
+    new_ypred_prob = clf.predict_proba(X_test)[:, 1]
+    new_rocAuc_score = roc_auc_score(y_test, new_ypred_prob)
+    new_fpr, new_tpr, _ = roc_curve(y_test,  new_ypred_prob)
+    new_result_table = new_result_table.append({'classifiers': clf_name,
+                                        'fpr':new_fpr, 
+                                        'tpr':new_tpr, 
+                                        'auc':new_rocAuc_score}, ignore_index=True)
+     # Compute sensitivity and specificity
+    new_tn, new_fp, new_fn, new_tp = confusion_matrix(y_test, new_y_pred).ravel()
+    new_matrix = [[new_tn, new_fp, new_fn, new_tp]]
+    new_sensit = new_tp / (new_tp + new_fn)
+    new_specif = new_tn / (new_tn + new_fp)
+    new_f1 = f1_score(y_test, new_y_pred)
+    new_mcc = matthews_corrcoef(y_test, new_y_pred)
+    new_bal_acc = balanced_accuracy_score(y_test, new_y_pred)
+    new_kappa = cohen_kappa_score(y_test, new_y_pred)
+    new_precision = precision_score(y_test, new_y_pred)
+    tun_new_row = {"Model": clf_name, 'ROC Score':new_rocAuc_score, 'F1 Score': new_f1,
+                         'Cohen kappa': new_kappa,
+                        'Balanced Acc': new_bal_acc,
+                        'MCC' : new_mcc,
+                        'Precision': new_precision,
+                        'Sensitivity': new_sensit,
+                        'Specificity': new_specif}
+    New_Model_results = New_Model_results.append(tun_new_row, ignore_index=True)
+
+# Set name of the classifiers as index labels
+new_result_table.set_index('classifiers', inplace=True)
+
+#In[42]: 
+Model_results
+
+#In[43]: 
+New_Model_results
+
+#In[44]: 
+#plotting the ROC Curve
+fig = plt.figure(figsize=(10,6))
+for i in new_result_table.index:
+    plt.plot(new_result_table.loc[i]['fpr'], 
+             new_result_table.loc[i]['tpr'], 
+             label="{}, AUC:" "{:.4f}".format(i, new_result_table.loc[i]['auc']))
+plt.plot([0,1], [0,1], color='black', linestyle='--')
+plt.xticks(np.arange(0.0, 1.1, step=0.2))
+plt.xlabel("False Positive Rate", fontsize=15)
+plt.yticks(np.arange(0.0, 1.1, step=0.2))
+plt.ylabel("True Positive Rate", fontsize=15)
+plt.title('TUNED ROC Curve', fontweight='heavy', fontsize=15)
+plt.legend(prop={'size':10}, loc='lower right')
+plt.show()
+
+#In[45]: 
+fig.savefig('tuned_roc_curve.png')
+
+#In[46]: 
+new_result_table.reset_index('classifiers', inplace=True)
+#In[47]:
+model_names = new_result_table['classifiers'].tolist()
+fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(15, 10))
+for i, ax in enumerate(axes.flat):
+    model_name = model_names[i]
+    new_roc_data = new_result_table[new_result_table['classifiers'] == model_name]
+    new_fpr = new_roc_data['fpr']
+    new_tpr = new_roc_data['tpr']
+    new_rocAuc_score = new_roc_data['auc']
+    # Plot the ROC curve
+    ax.plot(np.mean(new_fpr), np.mean(new_tpr), label ="AUC:" "{:.4f}".format(new_result_table.loc[i]['auc']))
+    ax.plot([0, 1], [0, 1], 'k--')  # Plot the random guessing curve
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.set_title(f'{model_name}')
+    ax.legend(loc="lower right")
+# Adjust the spacing between subplots
+plt.tight_layout()
+# Display the plot
+plt.show()
+
+#In[48]:
+fig.savefig('indi_tuned_roc_curve.png')
+
